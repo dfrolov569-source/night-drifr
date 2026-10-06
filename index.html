@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#080b16">
+<title>Night Drive</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #080b16; color: white;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow: hidden; touch-action: none;
+  }
+  canvas { display: block; width: 100vw; height: 100dvh; }
+  #top {
+    position: fixed; z-index: 2; top: max(18px, env(safe-area-inset-top));
+    left: 20px; right: 20px; display: flex; justify-content: space-between;
+    align-items: center; pointer-events: none;
+  }
+  .label { color: #63e5ff; font-size: 11px; letter-spacing: 3px; font-weight: 800; }
+  .sub { color: #a7adbd; font-size: 12px; margin-top: 4px; }
+  #score {
+    font-size: 24px; font-weight: 900; font-variant-numeric: tabular-nums;
+    background: #111827cc; border: 1px solid #ffffff22;
+    border-radius: 16px; padding: 8px 14px;
+  }
+  #panel {
+    position: fixed; z-index: 3; left: 24px; right: 24px; top: 50%;
+    transform: translateY(-50%); text-align: center; padding: 24px 18px;
+    border: 1px solid #ffffff25; border-radius: 24px;
+    background: #080b16eF; box-shadow: 0 12px 50px #0009;
+  }
+  #panel h1 { margin: 0 0 8px; font-size: 23px; letter-spacing: 2px; }
+  #panel p { margin: 0 0 18px; color: #b7bdcb; font-size: 14px; line-height: 1.5; }
+  button {
+    border: 0; color: #061018; background: #61e6ff; border-radius: 16px;
+    font-size: 15px; font-weight: 900; padding: 14px 25px;
+  }
+  #controls {
+    position: fixed; z-index: 2; left: 0; right: 0;
+    bottom: max(24px, env(safe-area-inset-bottom));
+    display: flex; justify-content: center; align-items: center; gap: 25px;
+  }
+  .arrow {
+    width: 66px; height: 58px; color: white; font-size: 25px;
+    background: #ffffff20; border: 1px solid #ffffff35;
+    padding: 0; touch-action: manipulation;
+  }
+  #hint { color: #b8c0d0; font-size: 10px; letter-spacing: 2px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="top">
+  <div><div class="label">NIGHT DRIVE</div><div class="sub">Ночная трасса</div></div>
+  <div id="score">0000</div>
+</div>
+
+<div id="panel">
+  <h1 id="title">ГОТОВ К ЗАЕЗДУ?</h1>
+  <p id="message">Уворачивайся от машин.<br>Перестраивайся кнопками или свайпом.</p>
+  <button id="start">ПОЕХАЛИ</button>
+</div>
+
+<div id="controls">
+  <button class="arrow" id="left" aria-label="Влево">←</button>
+  <span id="hint">ПЕРЕСТРОЕНИЕ</span>
+  <button class="arrow" id="right" aria-label="Вправо">→</button>
+</div>
+
+<script>
+const canvas = document.querySelector("#game");
+const ctx = canvas.getContext("2d");
+const panel = document.querySelector("#panel");
+const scoreBox = document.querySelector("#score");
+const title = document.querySelector("#title");
+const message = document.querySelector("#message");
+const startButton = document.querySelector("#start");
+
+let w, h, lane = 1, score = 0, running = false;
+let cars = [], lastTime = 0, spawnTimer = 0, roadOffset = 0;
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  w = innerWidth; h = innerHeight;
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener("resize", resize);
+resize();
+
+function roundedRect(x, y, width, height, radius, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+  ctx.fill();
+}
+
+function drawCar(x, y, width, height, color, isPlayer=false) {
+  // Колёса
+  roundedRect(x-width*.48, y-height*.27, width*.16, height*.25, 5, "#050609");
+  roundedRect(x+width*.32, y-height*.27, width*.16, height*.25, 5, "#050609");
+  roundedRect(x-width*.48, y+height*.08, width*.16, height*.25, 5, "#050609");
+  roundedRect(x+width*.32, y+height*.08, width*.16, height*.25, 5, "#050609");
+
+  // Кузов, стекло и фары
+  roundedRect(x-width/2, y-height/2, width, height, width*.24, color);
+  roundedRect(x-width*.29, y-height*.19, width*.58, height*.25, 8, "#122033");
+  const light = isPlayer ? "#d9fbff" : "#ff6675";
+  roundedRect(x-width*.34, y+height*.32, width*.2, 4, 2, light);
+  roundedRect(x+width*.14, y+height*.32, width*.2, 4, 2, light);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, w, h);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, "#11162b");
+  bg.addColorStop(1, "#05070d");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const roadW = Math.min(w * .82, 440);
+  const left = (w-roadW)/2;
+  const laneW = roadW/3;
+
+  // Неоновые огни у дороги
+  for (let i=0; i<12; i++) {
+    const y = (i*90 + roadOffset) % (h+90) - 45;
+    ctx.fillStyle = "#50ddff99";
+    ctx.fillRect(left-10, y, 3, 17);
+    ctx.fillStyle = "#bf72ff99";
+    ctx.fillRect(left+roadW+7, y, 3, 17);
+  }
+
+  // Дорога
+  ctx.fillStyle = "#171b25";
+  ctx.fillRect(left, 0, roadW, h);
+  ctx.fillStyle = "#67eaff88";
+  ctx.fillRect(left+3, 0, 2, h);
+  ctx.fillRect(left+roadW-5, 0, 2, h);
+
+  // Разметка
+  ctx.fillStyle = "#ffffff55";
+  for (let divider=1; divider<=2; divider++) {
+    const x = left + laneW*divider;
+    for (let i=0; i<12; i++) {
+      const y = (i*82 + roadOffset) % (h+82) - 41;
+      ctx.fillRect(x-1, y, 2, 35);
+    }
+  }
+
+  // Машины-препятствия
+  for (const car of cars) {
+    const x = left + laneW*(car.lane+.5);
+    drawCar(x, car.y, Math.min(52,laneW*.57), Math.min(82,laneW*.9), "#f04455");
+  }
+
+  // Машина игрока
+  const playerY = h*.77;
+  const playerX = left + laneW*(lane+.5);
+  drawCar(playerX, playerY, Math.min(56,laneW*.62), Math.min(90,laneW), "#087ff5", true);
+}
+
+function finishGame() {
+  running = false;
+  title.textContent = "ЗАЕЗД ОКОНЧЕН";
+  message.innerHTML = `Твой счёт: <b>${score}</b><br>Попробуешь ещё раз?`;
+  startButton.textContent = "ЕЩЁ РАЗ";
+  panel.style.display = "block";
+}
+
+function frame(time) {
+  const dt = Math.min((time-lastTime)/1000 || 0, .05);
+  lastTime = time;
+
+  if (running) {
+    const speed = h*.62 + score*1.2;
+    roadOffset = (roadOffset + speed*dt) % 82;
+    spawnTimer += dt;
+
+    const interval = Math.max(.48, 1.05-score*.008);
+    if (spawnTimer > interval) {
+      spawnTimer = 0;
+      cars.push({lane: Math.floor(Math.random()*3), y: -90});
+    }
+
+    for (const car of cars) car.y += speed*dt;
+
+    const playerY = h*.77;
+    if (cars.some(car => car.lane===lane && Math.abs(car.y-playerY)<65)) {
+      finishGame();
+    } else {
+      const before = cars.length;
+      cars = cars.filter(car => car.y < h+70);
+      score += before-cars.length;
+      scoreBox.textContent = String(score).padStart(4,"0");
+    }
+  }
+
+  draw();
+  requestAnimationFrame(frame);
+}
+
+function move(direction) {
+  if (running) lane = Math.max(0, Math.min(2, lane+direction));
+}
+
+document.querySelector("#left").addEventListener("pointerdown", e => {
+  e.preventDefault(); move(-1);
+});
+document.querySelector("#right").addEventListener("pointerdown", e => {
+  e.preventDefault(); move(1);
+});
+
+let startX = null;
+canvas.addEventListener("touchstart", e => {
+  startX = e.changedTouches[0].clientX;
+}, {passive:true});
+canvas.addEventListener("touchend", e => {
+  if (startX === null) return;
+  const dx = e.changedTouches[0].clientX-startX;
+  if (Math.abs(dx)>30) move(dx>0 ? 1 : -1);
+  startX = null;
+}, {passive:true});
+
+addEventListener("keydown", e => {
+  if (e.key==="ArrowLeft" || e.key==="a") move(-1);
+  if (e.key==="ArrowRight" || e.key==="d") move(1);
+});
+
+startButton.addEventListener("click", () => {
+  lane = 1; score = 0; cars = []; spawnTimer = 0;
+  scoreBox.textContent = "0000";
+  running = true;
+  panel.style.display = "none";
+});
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
